@@ -3,7 +3,10 @@ import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mapAvatarByPersonality } from "./src/avatar-mapping.js";
 import { BEHAVIOR_LIBRARY, findBehavior } from "./src/behavior-library.js";
+import { generateInterpretation, getLlmRuntimeSummary, streamInterpretation } from "./src/interpreter.js";
+import { buildPersonaImageLibrary } from "./src/persona-image-library.js";
 import {
   calculatePersonalityScores,
   evaluatePersonalityAssessment,
@@ -11,9 +14,6 @@ import {
   inferArchetype,
   QUESTIONNAIRE_ITEMS
 } from "./src/personality-engine.js";
-import { mapAvatarByPersonality } from "./src/avatar-mapping.js";
-import { generateInterpretation, getLlmRuntimeSummary } from "./src/interpreter.js";
-import { buildPersonaImageLibrary } from "./src/persona-image-library.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -216,6 +216,45 @@ const server = createServer(async (req, res) => {
         interpretation: interpretation.line,
         prompt_preview: interpretation.prompt
       });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/interpreter/stream") {
+      const body = await readJsonBody(req);
+      const catProfile = body.catProfile;
+      if (!catProfile?.scores) {
+        sendJson(res, 400, { error: "catProfile.scores is required." });
+        return;
+      }
+
+      const behavior =
+        findBehavior({ actionId: body.actionId, actionName: body.actionName }) || {
+          action_id: "custom_action",
+          action_name: body.actionName || "unknown_action",
+          base_meaning: body.baseMeaning || "No predefined meaning. Infer from context."
+        };
+
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no"
+      });
+
+      await streamInterpretation({
+        catProfile,
+        actionName: behavior.action_name,
+        baseMeaning: behavior.base_meaning,
+        onDelta: (chunk) => {
+          if (!res.writableEnded) {
+            res.write(chunk);
+          }
+        }
+      });
+
+      if (!res.writableEnded) {
+        res.end();
+      }
       return;
     }
 

@@ -36,6 +36,7 @@ let currentAssessment = null;
 let questionnaireItems = [];
 let experimentItems = [];
 let personaImageItems = [];
+let interpretationStreamController = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -44,6 +45,13 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function abortInterpretationStream() {
+  if (interpretationStreamController) {
+    interpretationStreamController.abort();
+    interpretationStreamController = null;
+  }
 }
 
 function bindPersonaImageState() {
@@ -362,6 +370,8 @@ async function generateProfile(event) {
 
 async function interpretAction(event) {
   event.preventDefault();
+  abortInterpretationStream();
+
   if (!currentProfile || !currentAssessment) {
     outputNode.textContent = "请先完成猫格评估，再进行行为解释。";
     return;
@@ -372,24 +382,48 @@ async function interpretAction(event) {
     ? { catProfile: currentProfile, actionName: customAction }
     : { catProfile: currentProfile, actionId: actionSelect.value };
 
-  outputNode.textContent = "猫猫正在说......";
+  outputNode.textContent = "";
+  interpretationStreamController = new AbortController();
 
   try {
-    const response = await fetch("/api/interpreter", {
+    const response = await fetch("/api/interpreter/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: interpretationStreamController.signal
     });
 
     if (!response.ok) {
       outputNode.textContent = "行为转译失败，请稍后重试。";
+      interpretationStreamController = null;
       return;
     }
 
-    const result = await response.json();
-    outputNode.textContent = result.interpretation;
+    if (!response.body) {
+      outputNode.textContent = "行为转译失败，请稍后重试。";
+      interpretationStreamController = null;
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      outputNode.textContent += decoder.decode(value, { stream: true });
+    }
+
+    outputNode.textContent += decoder.decode();
+    interpretationStreamController = null;
   } catch (_error) {
-    outputNode.textContent = "行为转译失败，请稍后重试。";
+    if (_error?.name !== "AbortError") {
+      outputNode.textContent = "行为转译失败，请稍后重试。";
+    }
+    interpretationStreamController = null;
   }
 }
 
