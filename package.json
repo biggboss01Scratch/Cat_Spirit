@@ -1,0 +1,13 @@
+{
+  "name": "cyber-cat-spirit",
+  "version": "0.1.0",
+  "description": "Cyber Cat-Spirit MVP for feline personality modeling, avatar mapping, and behavior interpretation.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js",
+    "check": "node --check server.js && node --check src/personality-engine.js && node --check src/avatar-mapping.js && node --check src/interpreter.js && node --check public/app.js"
+  },
+  "license": "MIT"
+}

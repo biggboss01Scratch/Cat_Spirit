@@ -1,0 +1,20 @@
+{
+  "cat_profile": {
+    "name": "Mocha",
+    "scores": {
+      "neuroticism": 3,
+      "extraversion": 8,
+      "dominance": 5,
+      "impulsivity": 7,
+      "agreeableness": 9
+    },
+    "archetype": "Energetic_Support"
+  },
+  "behavior_library": [
+    {
+      "action_id": "kneading",
+      "action_name": "踩奶",
+      "base_meaning": "对环境感到安全，唤起幼年依恋记忆"
+    }
+  ]
+}
