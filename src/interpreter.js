@@ -218,6 +218,125 @@ function getLlmEndpoint(config) {
     : `${config.baseUrl}/responses`;
 }
 
+function extractChatCompletionDelta(data) {
+  const delta = data?.choices?.[0]?.delta?.content;
+  if (typeof delta === "string") {
+    return delta;
+  }
+
+  if (Array.isArray(delta)) {
+    return delta.map((item) => item?.text || "").join("");
+  }
+
+  return "";
+}
+
+function extractResponsesDelta(data) {
+  if (typeof data?.delta === "string") {
+    return data.delta;
+  }
+
+  if (data?.type === "response.output_text.delta" && typeof data?.delta === "string") {
+    return data.delta;
+  }
+
+  if (typeof data?.output_text === "string") {
+    return data.output_text;
+  }
+
+  return "";
+}
+
+function extractStreamDelta(data, config) {
+  return config.apiInterface === "chat_completions"
+    ? extractChatCompletionDelta(data)
+    : extractResponsesDelta(data);
+}
+
+async function callLLMStream(prompt, onDelta) {
+  const config = resolveLlmConfig();
+  if (!config.enabled || typeof onDelta !== "function") {
+    return "";
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+
+  try {
+    const response = await fetch(getLlmEndpoint(config), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify({
+        ...buildLlmRequestPayload(prompt, config),
+        stream: true
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok || !response.body) {
+      return "";
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let fullText = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const eventBlock of events) {
+        const lines = eventBlock
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        for (const line of lines) {
+          if (!line.startsWith("data:")) {
+            continue;
+          }
+
+          const dataText = line.slice(5).trim();
+          if (!dataText || dataText === "[DONE]") {
+            continue;
+          }
+
+          let payload;
+          try {
+            payload = JSON.parse(dataText);
+          } catch (_error) {
+            continue;
+          }
+
+          const delta = extractStreamDelta(payload, config);
+          if (!delta) {
+            continue;
+          }
+
+          fullText += delta;
+          onDelta(delta);
+        }
+      }
+    }
+
+    return fullText.trim();
+  } catch (_error) {
+    return "";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function callLLM(prompt) {
   const config = resolveLlmConfig();
   if (!config.enabled) {
@@ -293,6 +412,30 @@ export async function generateInterpretation({ catProfile, actionName, baseMeani
   return {
     line,
     prompt
+  };
+}
+
+export async function streamInterpretation({ catProfile, actionName, baseMeaning, onDelta }) {
+  const prompt = buildInterpretPrompt({ catProfile, actionName, baseMeaning });
+  const llmText = await callLLMStream(prompt, onDelta);
+
+  if (llmText) {
+    return {
+      line: llmText,
+      prompt,
+      mode: "llm-stream"
+    };
+  }
+
+  const fallbackText = fallbackInterpretation({ catProfile, actionName, baseMeaning });
+  if (typeof onDelta === "function") {
+    onDelta(fallbackText);
+  }
+
+  return {
+    line: fallbackText,
+    prompt,
+    mode: "fallback"
   };
 }
 
